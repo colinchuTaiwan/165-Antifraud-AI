@@ -113,7 +113,7 @@ st.set_page_config(page_title="165 智慧防詐分析系統", page_icon="🚨", 
 st.title("🚨 165 智慧防詐分析系統")
 user_input = st.text_area("請輸入可疑訊息或對話內容：", height=150, placeholder="例如：收到簡訊說帳戶異常，要點擊連結...")
 
-if st.button("🔍 啟動全方位剖析", use_container_width=True):
+if st.button("🔍 詐騙分析", use_container_width=True):
     if not user_input.strip():
         st.warning("請輸入內容後再開始分析。")
         st.stop()
