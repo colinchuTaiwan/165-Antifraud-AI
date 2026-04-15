@@ -7,23 +7,31 @@ from google.genai import types
 import random
 
 # =========================
-# 1. API 初始化（改 Cloud 寫法）
+# 1. 初始化（Cloud 相容）
 # =========================
 @st.cache_resource
 def get_genai_client():
-    api_key = st.secrets.get("GEMINI_API_KEY")  # ✅ 改這裡
+    # ✅ 改為支援 Cloud + 本地
+    api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+    
     if not api_key:
-        st.error("請在 Streamlit Secrets 設定 GEMINI_API_KEY")
+        st.error("請設定 GEMINI_API_KEY（secrets 或 env）")
         st.stop()
-    return genai.Client(api_key=api_key)
+
+    return genai.Client(
+        api_key=api_key,
+        http_options={'api_version': 'v1beta'}  # ✅ 保留你原本設定
+    )
 
 client = get_genai_client()
 
-GEN_MODEL_ID = "gemini-1.5-flash"   # ✅ 穩定版
-EMBED_MODEL_ID = "text-embedding-004"
+# ✅ 完全不變
+GEN_MODEL_ID = "gemini-flash-latest"
+EMBED_MODEL_ID = "gemini-embedding-001"
+CHROMA_PATH = "chroma_crime_db"
 
 # =========================
-# 2. 安全 API 呼叫
+# 2. 安全 API 呼叫（優化穩定性）
 # =========================
 def safe_api_call(call_type, **kwargs):
     max_retries = 5
@@ -33,7 +41,8 @@ def safe_api_call(call_type, **kwargs):
             if call_type == 'embed':
                 res = client.models.embed_content(
                     model=EMBED_MODEL_ID,
-                    contents=kwargs['text']
+                    contents=kwargs['text'],
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
                 )
                 return res.embeddings[0].values
 
@@ -41,65 +50,162 @@ def safe_api_call(call_type, **kwargs):
                 return client.models.generate_content(
                     model=GEN_MODEL_ID,
                     contents=kwargs['prompt'],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1
+                    )
                 )
 
         except Exception as e:
-            wait_time = min(2 ** (i + 2), 30) + random.uniform(0, 1)
-            st.warning(f"API 錯誤，重試中 ({i+1}/5)...")
-            time.sleep(wait_time)
+            status = getattr(e, "status_code", None)
 
-    st.error("❌ API 多次失敗")
+            if status in [429, 500, 503]:
+                wait_time = min(2 ** (i + 2), 32) + random.uniform(0, 1)
+                st.warning(f"API 忙碌，重試中 ({i+1}/5)...")
+                time.sleep(wait_time)
+                continue
+
+            st.error(f"API 錯誤: {str(e)}")
+            st.stop()
+
+    st.error("API 多次失敗")
     st.stop()
 
 
 # =========================
-# 3. Chroma（改為 In-Memory 避免爆）
+# 3. Chroma（關鍵修正）
 # =========================
 @st.cache_resource
 def get_vector_db():
-    return chromadb.Client()   # ❗ 不用 Persistent
+    try:
+        # ✅ 優先使用 Persistent（本地 or 已存在）
+        return chromadb.PersistentClient(path=CHROMA_PATH)
+    except Exception:
+        # ✅ Cloud fallback（避免 crash）
+        st.warning("⚠️ 無法載入本地資料庫，改用暫存 DB")
+        return chromadb.Client()
 
 
 # =========================
-# 4. UI
+# 4. 文件解析（原樣保留）
+# =========================
+def parse_cases_from_doc(raw_text):
+    lines = raw_text.split('\n')
+    processed_cases = []
+    current_case = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        if "【核心特徵】" in line:
+            current_case.append(line)
+            processed_cases.append("\n".join(current_case))
+            current_case = []
+            continue
+
+        current_case.append(line)
+
+    if current_case:
+        processed_cases.append("\n".join(current_case))
+
+    return processed_cases
+
+
+# =========================
+# 5. UI
 # =========================
 st.set_page_config(
-    page_title="165 防詐分析系統",
+    page_title="165 智慧防詐分析系統",
     page_icon="🚨",
     layout="wide"
 )
 
-st.title("🚨 165 智慧防詐分析系統（Cloud版）")
+st.title("🚨 165 智慧防詐分析系統（Cloud相容版）")
 
 user_input = st.text_area(
     "請輸入可疑訊息：",
     height=150
 )
 
-if st.button("🔍 分析"):
+if st.button("🔍 啟動分析", use_container_width=True):
+
     if not user_input.strip():
         st.warning("請輸入內容")
         st.stop()
 
     with st.spinner("分析中..."):
 
+        # A. 向量化
         query_vec = safe_api_call('embed', text=user_input)
 
-        prompt = f"""
-你是一位資深防詐專家，分析以下內容：
+        db = get_vector_db()
 
+        # B. 查案例庫
+        try:
+            case_col = db.get_collection("165_cases")
+            case_results = case_col.query(
+                query_embeddings=[query_vec],
+                n_results=1
+            )
+
+            all_cases = []
+            top_cases_ctx = ""
+
+            if case_results['documents']:
+                raw_doc = case_results['documents'][0][0]
+                all_cases = parse_cases_from_doc(raw_doc)
+                top_cases_ctx = "\n\n---\n\n".join(all_cases[:3])
+
+        except Exception:
+            top_cases_ctx = "（案例庫無資料）"
+            all_cases = []
+
+        # C. 查教材庫
+        try:
+            kb_col = db.get_collection("anti_fraud_kb")
+            kb_results = kb_col.query(
+                query_embeddings=[query_vec],
+                n_results=2
+            )
+
+            kb_ctx = "\n\n".join(kb_results['documents'][0])
+
+        except Exception:
+            kb_ctx = "（教材庫無資料）"
+
+        # D. LLM 分析
+        prompt = f"""
+你是資深防詐分析官，請分析：
+
+【案例】
+{top_cases_ctx}
+
+【教材】
+{kb_ctx}
+
+【輸入】
 {user_input}
 
-請輸出：
+輸出：
 1. 詐騙類型
-2. 判斷理由
-3. 關鍵風險
-4. 建議行動
+2. 分析
+3. 風險點
+4. 建議
 """
 
         res = safe_api_call('generate', prompt=prompt)
 
         st.markdown("## 💡 分析結果")
         st.write(res.text)
+
+        # E. 顯示案例
+        if all_cases:
+            st.divider()
+            st.subheader("📌 相似案例")
+
+            for i, c in enumerate(all_cases[:3]):
+                with st.expander(f"案例 {i+1}", expanded=(i == 0)):
+                    st.info(c)
 
 st.caption("⚠️ 僅供參考")
