@@ -121,10 +121,10 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚨 165 智慧防詐分析系統（Cloud相容版）")
+st.title("🚨 165 智慧防詐分析系統 ")
 
 user_input = st.text_area(
-    "請輸入可疑訊息：",
+    "請輸入內容：",
     height=150
 )
 
