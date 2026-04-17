@@ -1,11 +1,3 @@
-'''
-1.加了 jitter（很專業）
-2.加了 cache DB（效能提升）
-3.有 query_vec 防呆
-4.kb_results 防呆
-5.all_cases 初始化
-6.上限 32 秒
-'''
 import os
 import time
 import streamlit as st
@@ -121,7 +113,7 @@ def get_vector_db():
 # 3. Streamlit UI
 # =========================
 st.set_page_config(page_title="165 智慧防詐分析系統", page_icon="🚨", layout="wide")
-st.title("🚨 165 智慧防詐分析系統 (案例 + 教材雙連動版)")
+st.title("🚨 165 智慧防詐分析系統")
 
 user_input = st.text_area("請輸入可疑訊息或對話內容：", height=150, placeholder="例如：收到簡訊說帳戶異常，要點擊連結...")
 
@@ -198,7 +190,7 @@ if st.button("🔍 啟動全方位剖析", use_container_width=True):
     
             # E. 底部參考面板
             st.divider()
-            st.subheader("📌 相似歷史案例 (Top 5)")
+            st.subheader("📌 歷史案例 (Top 5)")
             for idx, case_text in enumerate(all_cases[:5]):
                 with st.expander(f"🏆 第 {idx+1} 個案例", expanded=(idx==0)):
                     st.info(case_text)
