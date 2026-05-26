@@ -1,6 +1,4 @@
 # Streamlit 防詐分析系統（OpenAI 版本）
-
-```python
 import os
 import time
 import random
